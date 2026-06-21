@@ -4,7 +4,8 @@
 ## 2026.06.21
 
 For logs like these, we will get a `DecodingFailure at .server_name: Missing required field`, so I will need to figure
-out the idiomatic way to deserialise to an `Either` in `fs2-kafka`.
+out the idiomatic way to deserialise to an `Either` in `fs2-kafka`. I'm not sure if I really need the higher-kinded 
+action in `kafkaValueDeserialiser`.
 
 ```json
 {
