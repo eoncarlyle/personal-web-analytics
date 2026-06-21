@@ -1,3 +1,4 @@
+import Deserialise.nginxLogDeserialiser
 import cats.effect.{IO, IOApp}
 import com.typesafe.config.{Config, ConfigFactory}
 import fs2._
@@ -6,7 +7,7 @@ import fs2.kafka.consumer.KafkaConsumeChunk.CommitNow
 
 object Main extends IOApp.Simple {
 
-  def getConsumerConfig(config: Config): ConsumerSettings[IO, Option[String], String] = {
+  def getConsumerConfig(config: Config): ConsumerSettings[IO, Option[String], NginxLog] = {
     val kafka = config.getConfig("kafka")
     val ssl = kafka.getConfig("ssl")
 
@@ -24,7 +25,7 @@ object Main extends IOApp.Simple {
     )
 
     val defaultConsumerSettings =
-      ConsumerSettings[IO, Option[String], String]
+      ConsumerSettings[IO, Option[String], NginxLog]
         .withAutoOffsetReset(AutoOffsetReset.Earliest)
         .withBootstrapServers(kafka.getString("bootstrap-servers"))
         .withGroupId("personal-web-analytics")
@@ -32,20 +33,18 @@ object Main extends IOApp.Simple {
     configFileSettings.foldLeft(defaultConsumerSettings)((setting, fileSetting) => setting.withProperty(fileSetting._1, fileSetting._2))
   }
 
+  // TODO WAL pragma
   def getSqliteConfig(config: Config) = config.getString("database")
-  private def consumeChunk(chunk: Chunk[ConsumerRecord[Option[String], String]]): IO[CommitNow] = {
-    IO.pure(chunk.map {record => IO.println(s"key=${record.value}")}).map(_ => CommitNow)
-  }
+
+  private def consumeRecords(records: Chunk[ConsumerRecord[Option[String], NginxLog]]) =
+    records.traverse(record => IO.println(s"${record.value}")).as(CommitNow)
 
   val run: IO[Unit] = {
-
-    val consumerConfig = IO(ConfigFactory.load()).map(getConsumerConfig)
-
     for {
       baseConfig <- IO(ConfigFactory.load())
       consumerConfig = getConsumerConfig(baseConfig)
       nginxLogsTopic = baseConfig.getString("nginx-logs-topic")
-      _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeChunk)
+      _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords)
     } yield ()
   }
 }
