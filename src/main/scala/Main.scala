@@ -1,4 +1,5 @@
 import Deserialise.nginxLogDeserialiser
+import Model.{CirceError, NginxLog}
 import cats.effect.{IO, IOApp}
 import com.typesafe.config.{Config, ConfigFactory}
 import fs2._
@@ -7,7 +8,7 @@ import fs2.kafka.consumer.KafkaConsumeChunk.CommitNow
 
 object Main extends IOApp.Simple {
 
-  def getConsumerConfig(config: Config): ConsumerSettings[IO, Option[String], NginxLog] = {
+  def getConsumerConfig(config: Config): ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]] = {
     val kafka = config.getConfig("kafka")
     val ssl = kafka.getConfig("ssl")
 
@@ -25,7 +26,7 @@ object Main extends IOApp.Simple {
     )
 
     val defaultConsumerSettings =
-      ConsumerSettings[IO, Option[String], NginxLog]
+      ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]]
         .withAutoOffsetReset(AutoOffsetReset.Earliest)
         .withBootstrapServers(kafka.getString("bootstrap-servers"))
         .withGroupId("personal-web-analytics")
@@ -36,7 +37,8 @@ object Main extends IOApp.Simple {
   // TODO WAL pragma
   def getSqliteConfig(config: Config) = config.getString("database")
 
-  private def consumeRecords(records: Chunk[ConsumerRecord[Option[String], NginxLog]]) =
+
+  private def consumeRecords(records: Chunk[ConsumerRecord[Option[String], Either[CirceError, NginxLog]]]) =
     records.traverse(record => IO.println(s"${record.value}")).as(CommitNow)
 
   val run: IO[Unit] = {

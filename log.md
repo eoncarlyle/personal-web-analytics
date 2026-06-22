@@ -47,6 +47,29 @@ action in `kafkaValueDeserialiser`.
 }
 ```
 
+
+```sqlite
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA busy_timeout = 5000;
+PRAGMA cache_size = -20000;
+PRAGMA foreign_keys = ON;
+```
+
+```sqlite
+CREATE TABLE nginx_log (
+    server_name TEXT    NOT NULL,
+    uri         TEXT    NOT NULL,
+    status      INTEGER NOT NULL,
+    remote_addr TEXT    NOT NULL,
+    referrer    TEXT    NOT NULL DEFAULT '',
+    count       INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (server_name, uri, status, remote_addr, referrer)
+);
+```
+
+
+
 ## 2026.06.20
 
 This did not work, because the `IO` in `chunk.map` wasn't actually applied. Now it is time to actually understand Cats a
