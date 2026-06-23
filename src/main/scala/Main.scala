@@ -5,6 +5,10 @@ import com.typesafe.config.{Config, ConfigFactory}
 import fs2._
 import fs2.kafka._
 import fs2.kafka.consumer.KafkaConsumeChunk.CommitNow
+import doobie._
+import doobie.implicits._
+import cats.effect.kernel.Resource
+import doobie.util.transactor
 
 object Main extends IOApp.Simple {
 
@@ -37,16 +41,45 @@ object Main extends IOApp.Simple {
   // TODO WAL pragma
   def getSqliteConfig(config: Config) = config.getString("database")
 
+  private type Transactor = transactor.Transactor.Aux[IO, Unit]
 
-  private def consumeRecords(records: Chunk[ConsumerRecord[Option[String], Either[CirceError, NginxLog]]]) =
-    records.traverse(record => IO.println(s"${record.value}")).as(CommitNow)
+  def getTransactor(config: Config): Transactor = Transactor.fromDriverManager[IO](
+    driver = "org.sqlite.JDBC", url = s"jdbc:sqlite:${getSqliteConfig(config)}", user = "", password = "", logHandler = None
+  )
+
+  def insertLog(nginxLog: NginxLog): Update0 = {
+    val NginxLog(serverName, uri, remoteAddr, referrer) = nginxLog
+    sql"""
+    INSERT INTO nginx_log (server_name, uri, remote_addr, referrer)
+    VALUES ($serverName, $uri, $remoteAddr, ${referrer.getOrElse("")})
+    ON CONFLICT (server_name, uri, remote_addr, referrer)
+    DO UPDATE SET count = count + 1;
+    """.update
+  }
+
+  private def consumeRecords(transactor: Transactor)(records: Chunk[ConsumerRecord[Option[String], Either[CirceError, NginxLog]]]) =
+    records.traverse { record =>
+      record.value match {
+        case Left(_) => IO.pure(-1)
+        case Right(nginxLog) => insertLog(nginxLog).run.transact(transactor)
+      }
+    }.as(CommitNow)
+
+  //records.traverse { record =>
+  //  match eitherNginxLog.value with
+  //  case Left(error) => IO.pure(-1)
+  //  case Right(nginxLog) => insertLog(nginxLog).run.transact(transactor)
+  //}.as(CommitNow)
+
+  //    records.traverse(record => IO.println(s"${record.value}")).as(CommitNow)
 
   val run: IO[Unit] = {
     for {
       baseConfig <- IO(ConfigFactory.load())
+      transactor = getTransactor(baseConfig)
       consumerConfig = getConsumerConfig(baseConfig)
       nginxLogsTopic = baseConfig.getString("nginx-logs-topic")
-      _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords)
+      _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords(transactor))
     } yield ()
   }
 }

@@ -60,11 +60,10 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE nginx_log (
     server_name TEXT    NOT NULL,
     uri         TEXT    NOT NULL,
-    status      INTEGER NOT NULL,
     remote_addr TEXT    NOT NULL,
     referrer    TEXT    NOT NULL DEFAULT '',
     count       INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (server_name, uri, status, remote_addr, referrer)
+    PRIMARY KEY (server_name, uri, remote_addr, referrer)
 );
 ```
 
