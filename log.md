@@ -1,5 +1,14 @@
 # Learning Log
 
+## 2026.06.23
+
+Logging done, I've discovered that there is a SQLite module for Grafana which may tick a lot of boxes. Will need to be 
+careful ops wise, and I'm still not sure the best way to run timed tasks in Cats world
+
+## 2026.06.22
+
+I need more logging on errors (and just in general, frankly) but what I have works. After that stage, the next piece is 
+backups 
 
 ## 2026.06.21
 

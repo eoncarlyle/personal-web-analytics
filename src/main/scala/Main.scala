@@ -7,10 +7,12 @@ import fs2.kafka._
 import fs2.kafka.consumer.KafkaConsumeChunk.CommitNow
 import doobie._
 import doobie.implicits._
-import cats.effect.kernel.Resource
 import doobie.util.transactor
+import org.typelevel.log4cats.{Logger, LoggerFactory}
+import org.typelevel.log4cats.slf4j.{Slf4jFactory, Slf4jLogger}
 
 object Main extends IOApp.Simple {
+  implicit val logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
   def getConsumerConfig(config: Config): ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]] = {
     val kafka = config.getConfig("kafka")
@@ -38,7 +40,6 @@ object Main extends IOApp.Simple {
     configFileSettings.foldLeft(defaultConsumerSettings)((setting, fileSetting) => setting.withProperty(fileSetting._1, fileSetting._2))
   }
 
-  // TODO WAL pragma
   def getSqliteConfig(config: Config) = config.getString("database")
 
   private type Transactor = transactor.Transactor.Aux[IO, Unit]
@@ -58,20 +59,12 @@ object Main extends IOApp.Simple {
   }
 
   private def consumeRecords(transactor: Transactor)(records: Chunk[ConsumerRecord[Option[String], Either[CirceError, NginxLog]]]) =
-    records.traverse { record =>
+    Logger[IO].info(s"Consumer fetched ${records.size} records") *> records.traverse { record =>
       record.value match {
-        case Left(_) => IO.pure(-1)
+        case Left(_) => Logger[IO].info(s"Consumer fetched ${records.size} records")
         case Right(nginxLog) => insertLog(nginxLog).run.transact(transactor)
       }
     }.as(CommitNow)
-
-  //records.traverse { record =>
-  //  match eitherNginxLog.value with
-  //  case Left(error) => IO.pure(-1)
-  //  case Right(nginxLog) => insertLog(nginxLog).run.transact(transactor)
-  //}.as(CommitNow)
-
-  //    records.traverse(record => IO.println(s"${record.value}")).as(CommitNow)
 
   val run: IO[Unit] = {
     for {
