@@ -24,5 +24,12 @@ lazy val root = (project in file("."))
       "org.xerial" % "sqlite-jdbc" % sqliteJdbcVersion,
       "org.typelevel" %% "log4cats-slf4j" % log4CatsVersion,
       "ch.qos.logback" % "logback-classic" % logbackVersion
-    )
+    ),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "services", _*) => MergeStrategy.concat
+      case PathList("META-INF", _*)             => MergeStrategy.discard
+      case "reference.conf"                     => MergeStrategy.concat
+      case _                                    => MergeStrategy.first
+    },
+    assembly / assemblyJarName := "personal-web-analytics.jar"
   )

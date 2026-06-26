@@ -1,6 +1,6 @@
 import Deserialise.nginxLogDeserialiser
-import Model.{CirceError, NginxLog}
-import cats.effect.{IO, IOApp}
+import Model.{AppEnvironment, CirceError, DevEnvironment, NginxLog, ProdEnvironment, getEnvironment}
+import cats.effect.{ExitCode, IO, IOApp}
 import com.typesafe.config.{Config, ConfigFactory}
 import fs2._
 import fs2.kafka._
@@ -11,10 +11,12 @@ import doobie.util.transactor
 import org.typelevel.log4cats.{Logger, LoggerFactory}
 import org.typelevel.log4cats.slf4j.{Slf4jFactory, Slf4jLogger}
 
-object Main extends IOApp.Simple {
+import java.io.File
+
+object Main extends IOApp {
   implicit val logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
-  def getConsumerConfig(config: Config): ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]] = {
+  def getConsumerConfig(config: Config, appEnvironment: AppEnvironment): ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]] = {
     val kafka = config.getConfig("kafka")
     val ssl = kafka.getConfig("ssl")
 
@@ -31,11 +33,16 @@ object Main extends IOApp.Simple {
       "ssl.enabled.protocols" -> ssl.getString("enabled-protocols"),
     )
 
+    val groupId = appEnvironment match {
+      case DevEnvironment => "dev-personal-web-analytics"
+      case ProdEnvironment => "prod-personal-web-analytics"
+    }
+
     val defaultConsumerSettings =
       ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]]
         .withAutoOffsetReset(AutoOffsetReset.Earliest)
         .withBootstrapServers(kafka.getString("bootstrap-servers"))
-        .withGroupId("personal-web-analytics")
+        .withGroupId(groupId)
 
     configFileSettings.foldLeft(defaultConsumerSettings)((setting, fileSetting) => setting.withProperty(fileSetting._1, fileSetting._2))
   }
@@ -66,13 +73,26 @@ object Main extends IOApp.Simple {
       }
     }.as(CommitNow)
 
-  val run: IO[Unit] = {
-    for {
-      baseConfig <- IO(ConfigFactory.load())
-      transactor = getTransactor(baseConfig)
-      consumerConfig = getConsumerConfig(baseConfig)
-      nginxLogsTopic = baseConfig.getString("nginx-logs-topic")
-      _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords(transactor))
-    } yield ()
+  private def getConfigFileName(appEnvironment: AppEnvironment) = appEnvironment match {
+    case DevEnvironment => "dev.application.conf"
+    case ProdEnvironment => "prod.application.conf"
+  }
+
+  override def run(args: List[String]): IO[ExitCode] = {
+
+    val maybeEnvironment: Option[AppEnvironment] = args match {
+      case single :: Nil => Some(single).flatMap(getEnvironment)
+      case _ => None
+    }
+
+    maybeEnvironment.map(environment => {
+      for {
+        baseConfig <- IO(ConfigFactory.parseResourcesAnySyntax(getConfigFileName(environment)))
+        transactor = getTransactor(baseConfig)
+        consumerConfig = getConsumerConfig(baseConfig, environment)
+        nginxLogsTopic = baseConfig.getString("nginx-logs-topic")
+        _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords(transactor))
+      } yield ExitCode.Success
+    }).getOrElse(Logger[IO].error("Must specify application environment as `dev` or `prod`") *> IO(ExitCode.Error))
   }
 }
