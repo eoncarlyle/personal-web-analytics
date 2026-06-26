@@ -1,0 +1,82 @@
+name: Build and Deploy Personal Web Analytics
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "build.sbt"
+      - "project/**"
+      - "Containerfile"
+      - ".github/workflows/**"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build_and_push:
+    runs-on: [self-hosted, santa-cruz]
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Clean old images
+        run: podman image prune -af
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate version info
+        id: version
+        run: |
+          VERSION=$(date +'%Y.%m.%d').${{ github.run_number }}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo ${{ secrets.GITHUB_TOKEN }} | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build container image
+        run: |
+          podman build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} -f Containerfile .
+          podman tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Push container image
+        run: |
+          podman push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          podman push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  deploy:
+    needs: build_and_push
+    runs-on: [self-hosted, santa-cruz]
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo ${{ secrets.GITHUB_TOKEN }} | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Pull latest image
+        run: |
+          podman pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build_and_push.outputs.version }}
+
+      - name: Deploy container
+        run: |
+          podman run -d \
+            --name personal-web-analytics \
+            --replace \
+            --restart unless-stopped \
+            -v /home/iain/personal-web-analytics/certs:/certs:z \
+            -v /home/iain/personal-web-analytics/data:/data:z \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build_and_push.outputs.version }}
+
+      - name: Verify container deployment
+        run: |
+          podman ps --format "{{.Names}}: {{.Status}}" | grep personal-web-analytics
