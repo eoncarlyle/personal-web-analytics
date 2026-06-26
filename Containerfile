@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jdk AS build
+FROM docker.io/eclipse-temurin:21-jdk AS build
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN sbt update
 COPY src/ src/
 RUN sbt assembly
 
-FROM eclipse-temurin:21-jre
+FROM docker.io/eclipse-temurin:21-jre
 
 WORKDIR /app
 
