@@ -8,7 +8,8 @@ val circeVersion = "0.14.15"
 val doobieVersion = "1.0.0-RC12"
 val sqliteJdbcVersion = "3.49.0.0"
 val log4CatsVersion = "2.8.0"
-val logbackVersion =  "1.4.14"
+val logbackVersion = "1.4.14"
+val awsSdkVersion = "2.46.17"
 
 lazy val root = (project in file("."))
   .settings(
@@ -23,13 +24,14 @@ lazy val root = (project in file("."))
       "org.tpolecat" %% "doobie-hikari" % doobieVersion,
       "org.xerial" % "sqlite-jdbc" % sqliteJdbcVersion,
       "org.typelevel" %% "log4cats-slf4j" % log4CatsVersion,
-      "ch.qos.logback" % "logback-classic" % logbackVersion
+      "ch.qos.logback" % "logback-classic" % logbackVersion,
+      "software.amazon.awssdk" % "s3" % awsSdkVersion
     ),
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", "services", _*) => MergeStrategy.concat
-      case PathList("META-INF", _*)             => MergeStrategy.discard
-      case "reference.conf"                     => MergeStrategy.concat
-      case _                                    => MergeStrategy.first
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf" => MergeStrategy.concat
+      case _ => MergeStrategy.first
     },
     assembly / assemblyJarName := "personal-web-analytics.jar"
   )
