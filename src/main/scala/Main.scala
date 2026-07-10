@@ -138,7 +138,7 @@ object Main extends IOApp {
       bucketedObjects.flatMap(entry => {
         val (bucket, entries) = entry
         (bucket, keepOldestObject) match {
-          case (bucket, true) if bucket == maxBucket && bucket > bucketCeiling => entries.sortBy(_._2).tail.map(_._1)
+          case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => entries.sortBy(_._2).tail.map(_._1)
           case (bucket, false) if bucket > bucketCeiling => entries.map(_._1)
           case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.map(_._1)
         }
