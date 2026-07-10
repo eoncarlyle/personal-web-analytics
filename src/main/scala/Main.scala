@@ -1,6 +1,8 @@
 import Deserialise.nginxLogDeserialiser
 import Model.{AppEnvironment, CirceError, DevEnvironment, NginxLog, ProdEnvironment, getEnvironment}
+import cats.effect.kernel.Resource
 import cats.effect.{ExitCode, IO, IOApp}
+import cats.implicits.toFoldableOps
 import com.typesafe.config.{Config, ConfigFactory}
 import fs2._
 import fs2.kafka._
@@ -8,15 +10,26 @@ import fs2.kafka.consumer.KafkaConsumeChunk.CommitNow
 import doobie._
 import doobie.implicits._
 import doobie.util.transactor
-import org.typelevel.log4cats.{Logger, LoggerFactory}
-import org.typelevel.log4cats.slf4j.{Slf4jFactory, Slf4jLogger}
+import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
+import doobie.util.transactor.Strategy
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.{Delete, DeleteObjectsRequest, ListObjectsV2Request, ObjectIdentifier, PutObjectRequest, S3Object}
+import software.amazon.awssdk.core.sync.RequestBody
 
-import java.io.File
+import java.net.URI
+import java.nio.file.{Files, Path, Paths}
+import java.time.Instant
+import scala.concurrent.duration.{DAYS, Duration, DurationInt}
+import scala.jdk.CollectionConverters.{CollectionHasAsScala, IterableHasAsJava}
+import scala.util.matching.Regex
 
 object Main extends IOApp {
   implicit val logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
-  def getConsumerConfig(config: Config, appEnvironment: AppEnvironment): ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]] = {
+  private def getConsumerConfig(config: Config, appEnvironment: AppEnvironment): ConsumerSettings[IO, Option[String], Either[CirceError, NginxLog]] = {
     val kafka = config.getConfig("kafka")
     val ssl = kafka.getConfig("ssl")
 
@@ -47,36 +60,60 @@ object Main extends IOApp {
     configFileSettings.foldLeft(defaultConsumerSettings)((setting, fileSetting) => setting.withProperty(fileSetting._1, fileSetting._2))
   }
 
-  def getSqliteConfig(config: Config) = config.getString("database")
-
   private type Transactor = transactor.Transactor.Aux[IO, Unit]
 
-  def getTransactor(config: Config): Transactor = Transactor.fromDriverManager[IO](
+  private def getSqliteConfig(config: Config) = config.getString("database")
+
+  private def getTransactor(config: Config): Transactor = Transactor.fromDriverManager[IO](
     driver = "org.sqlite.JDBC", url = s"jdbc:sqlite:${getSqliteConfig(config)}", user = "", password = "", logHandler = None
   )
 
-  def insertLog(nginxLog: NginxLog): Update0 = {
+  private def getS3Resource: Resource[IO, S3Client] =
+    Resource.fromAutoCloseable(
+      IO(S3Client.builder()
+        .credentialsProvider(DefaultCredentialsProvider.builder().build())
+        .endpointOverride(URI.create("https://t3.storage.dev"))
+        .region(Region.of("auto")).build())
+    )
+
+  private type AppConsumerRecord = ConsumerRecord[Option[String], Either[CirceError, NginxLog]]
+
+  private def insertLog(nginxLog: NginxLog, appConsumerRecord: AppConsumerRecord) = {
     val NginxLog(serverName, uri, remoteAddr, referrer) = nginxLog
-    sql"""
-    INSERT INTO nginx_log (server_name, uri, remote_addr, referrer)
-    VALUES ($serverName, $uri, $remoteAddr, ${referrer.getOrElse("")})
-    ON CONFLICT (server_name, uri, remote_addr, referrer)
-    DO UPDATE SET count = count + 1;
-    """.update
+    for {
+      _ <-
+        sql"""
+          INSERT INTO nginx_log (server_name, uri, remote_addr, referrer)
+          VALUES ($serverName, $uri, $remoteAddr, ${referrer.getOrElse("")})
+          ON CONFLICT (server_name, uri, remote_addr, referrer)
+          DO UPDATE SET count = count + 1;
+        """.update.run
+      _ <-
+        sql"""
+          INSERT OR REPLACE INTO consumer_state (partition, offset)
+          VALUES (${appConsumerRecord.partition}, ${appConsumerRecord.offset})
+        """.update.run
+    } yield ()
   }
 
   private def consumeRecords(transactor: Transactor)(records: Chunk[ConsumerRecord[Option[String], Either[CirceError, NginxLog]]]) =
     Logger[IO].info(s"Consumer fetched ${records.size} records") *> records.traverse { record =>
       record.value match {
         case Left(_) => Logger[IO].info(s"Consumer fetched ${records.size} records")
-        case Right(nginxLog) => insertLog(nginxLog).run.transact(transactor)
+        case Right(nginxLog) => insertLog(nginxLog, record).transact(transactor)
       }
     }.as(CommitNow)
+
+  private def getEnvSlug(appEnvironment: AppEnvironment) = appEnvironment match {
+    case DevEnvironment => "dev"
+    case ProdEnvironment => "prod"
+  }
 
   private def getConfigFileName(appEnvironment: AppEnvironment) = appEnvironment match {
     case DevEnvironment => "dev.application.conf"
     case ProdEnvironment => "prod.application.conf"
   }
+
 
   private val s3BackupObjectRegex: Regex = "^([0-9]+)\\..*$".r
 
@@ -164,7 +201,10 @@ object Main extends IOApp {
         transactor = getTransactor(baseConfig)
         consumerConfig = getConsumerConfig(baseConfig, environment)
         nginxLogsTopic = baseConfig.getString("nginx-logs-topic")
-        _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords(transactor))
+        backupBucket = baseConfig.getString("backup-bucket")
+        dataDirectory = Paths.get(getSqliteConfig(baseConfig)).getParent.toUri;
+        _ <- getS3Resource.use(s3 => backup(environment, s3, transactor, backupBucket, dataDirectory)).start
+        _ <- KafkaConsumer.stream(consumerConfig).subscribeTo(nginxLogsTopic).consumeChunk(consumeRecords(transactor)(_))
       } yield ExitCode.Success
     }).getOrElse(Logger[IO].error("Must specify application environment as `dev` or `prod`") *> IO(ExitCode.Error))
   }
