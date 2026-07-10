@@ -184,7 +184,7 @@ object Main extends IOApp {
     backupName = s"${currentTime.getEpochSecond.toString}.${getEnvSlug(appEnvironment)}.backup.app.sqlite"
     _ <-
       sql"""
-          VACUUM INTO ${backupName}
+          VACUUM INTO ${dataDirectory.resolve(backupName).toString}
         """.update.run.transact(Transactor.strategy.set(transactor, Strategy.void))
     _ <- IO.blocking(s3Client.putObject(
       PutObjectRequest.builder().bucket(backupBucket).key(backupName).build(),
