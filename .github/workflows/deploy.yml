@@ -77,6 +77,7 @@ jobs:
             -v /home/iain/personal-web-analytics/data:/data:z \
             --secret tigris-access-key,type=env,target=AWS_ACCESS_KEY_ID \
             --secret tigris-secret-key,type=env,target=AWS_SECRET_ACCESS_KEY \
+            --network host \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build_and_push.outputs.version }}
 
       - name: Verify container deployment
