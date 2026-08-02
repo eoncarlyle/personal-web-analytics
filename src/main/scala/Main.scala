@@ -44,6 +44,7 @@ object Main extends IOApp {
       "ssl.truststore.password" -> ssl.getString("truststore-password"),
       "ssl.protocol" -> ssl.getString("protocol"),
       "ssl.enabled.protocols" -> ssl.getString("enabled-protocols"),
+      "ssl.endpoint.identification.algorithm" -> ssl.getString("endpoint-identification-algorithm")
     )
 
     val groupId = appEnvironment match {
