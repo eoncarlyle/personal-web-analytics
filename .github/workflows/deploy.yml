@@ -17,7 +17,7 @@ env:
 
 jobs:
   build_and_push:
-    runs-on: [self-hosted, santa-cruz]
+    runs-on: [santa-cruz]
 
     permissions:
       contents: read
@@ -31,7 +31,7 @@ jobs:
         run: podman image prune -af
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Generate version info
         id: version
