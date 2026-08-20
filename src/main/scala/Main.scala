@@ -124,7 +124,7 @@ object Main extends IOApp {
     .flatMap(o => s3BackupObjectRegex.findAllMatchIn(o.key())
       .map(m => Instant.ofEpochSecond(m.group(1).toLong)).nextOption().map(ts => (o, ts)))
 
-  private def s3ToDelete(backupObjectWithCreationTime: List[(S3Object, Instant)], current: Instant, interval: Duration, bucketSize: Duration, keepOldestObject: Boolean): Iterable[S3Object] = {
+  def s3ToDelete(backupObjectWithCreationTime: List[(S3Object, Instant)], current: Instant, interval: Duration, bucketSize: Duration, keepOldestObject: Boolean): Iterable[S3Object] = {
     val bucketedObjects = backupObjectWithCreationTime.groupBy(p => (current.getEpochSecond - p._2.getEpochSecond) / bucketSize.toSeconds)
 
     if (bucketedObjects.isEmpty) {
@@ -135,6 +135,8 @@ object Main extends IOApp {
       bucketedObjects.flatMap(entry => {
         val (bucket, entries) = entry
         (bucket, keepOldestObject) match {
+          // At least one backup needs to be 'on track' to progress to the next window, hence double tail
+          case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.tail.map(_._1)
           case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => entries.sortBy(_._2).tail.map(_._1)
           case (bucket, false) if bucket > bucketCeiling => entries.map(_._1)
           case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.map(_._1)
@@ -169,8 +171,6 @@ object Main extends IOApp {
     _ <- IO.blocking(s3Client.deleteObjects(getDeleteObjectsRequest(backupBucket, olderThanDayToDelete)))
     _ <- Logger[IO].info(s"Deleting ${youngerThanDayToDelete.size} S3 backups younger than one day")
     _ <- IO.blocking(s3Client.deleteObjects(getDeleteObjectsRequest(backupBucket, youngerThanDayToDelete)))
-
-
   } yield ()
 
   private def backup(appEnvironment: AppEnvironment, s3Client: S3Client, transactor: Transactor, backupBucket: String, dataDirectory: URI) = ((for {
