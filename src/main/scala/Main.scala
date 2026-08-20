@@ -139,7 +139,7 @@ object Main extends IOApp {
           case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.tail.map(_._1)
           case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => entries.sortBy(_._2).tail.map(_._1)
           case (bucket, false) if bucket > bucketCeiling => entries.map(_._1)
-          case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.map(_._1)
+          case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.tail.map(_._1)
         }
       }
       )
