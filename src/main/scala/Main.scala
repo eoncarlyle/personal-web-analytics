@@ -144,8 +144,8 @@ object Main extends IOApp {
         val (bucket, entries) = entry
         (bucket, keepOldestObject) match {
           // At least one backup needs to be 'on track' to progress to the next window, hence double tail
-          case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).flatMap(maybeTail).getOrElse(List()).map(_._1)
-          case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => entries.sortBy(_._2).tail.map(_._1)
+          case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).getOrElse(List()).map(_._1)
+          case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => maybeTail(entries.sortBy(_._2)).getOrElse(List()).map(_._1)
           case (bucket, false) if bucket > bucketCeiling => entries.map(_._1)
           case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).getOrElse(List()).map(_._1)
         }
