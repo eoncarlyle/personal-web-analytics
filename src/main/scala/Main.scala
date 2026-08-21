@@ -22,8 +22,10 @@ import software.amazon.awssdk.core.sync.RequestBody
 import java.net.URI
 import java.nio.file.{Files, Path, Paths}
 import java.time.Instant
+import scala.None.getOrElse
 import scala.concurrent.duration.{DAYS, Duration, DurationInt}
 import scala.jdk.CollectionConverters.{CollectionHasAsScala, IterableHasAsJava}
+import scala.util.chaining.scalaUtilChainingOps
 import scala.util.matching.Regex
 
 object Main extends IOApp {
@@ -124,6 +126,12 @@ object Main extends IOApp {
     .flatMap(o => s3BackupObjectRegex.findAllMatchIn(o.key())
       .map(m => Instant.ofEpochSecond(m.group(1).toLong)).nextOption().map(ts => (o, ts)))
 
+  private def maybeTail[A](list: List[A]): Option[List[A]] =
+    list match {
+      case iterable if iterable.size > 1 => Some(iterable.tail)
+      case _ => None
+    }
+
   def s3ToDelete(backupObjectWithCreationTime: List[(S3Object, Instant)], current: Instant, interval: Duration, bucketSize: Duration, keepOldestObject: Boolean): Iterable[S3Object] = {
     val bucketedObjects = backupObjectWithCreationTime.groupBy(p => (current.getEpochSecond - p._2.getEpochSecond) / bucketSize.toSeconds)
 
@@ -136,10 +144,11 @@ object Main extends IOApp {
         val (bucket, entries) = entry
         (bucket, keepOldestObject) match {
           // At least one backup needs to be 'on track' to progress to the next window, hence double tail
-          case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.tail.map(_._1)
+          case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).flatMap(maybeTail).getOrElse(List()).map(_._1)
           case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => entries.sortBy(_._2).tail.map(_._1)
           case (bucket, false) if bucket > bucketCeiling => entries.map(_._1)
-          case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.tail.map(_._1)
+          ///case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).flatMap(maybeTail).getOrElse(List()).map(_._1)
+          case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).tail.map(_._1)
         }
       }
       )
@@ -156,7 +165,7 @@ object Main extends IOApp {
     _ <- Logger[IO].info("Cleaning up database backups on disk")
     onDisk = IO.blocking(Files.list(Path.of(dataDirectory)).filter(p => backupFileRegex.matches(p.getFileName.toString)).toList.asScala.toList)
     _ <- onDisk.flatMap { files =>
-        Logger[IO].info(s"Deleting ${files.size} database backups on disk") *>
+      Logger[IO].info(s"Deleting ${files.size} database backups on disk") *>
         files.traverse_(p => IO.blocking(Files.delete(p)))
     }
     _ <- Logger[IO].info("Cleaning up database backups in object storage")
@@ -167,9 +176,9 @@ object Main extends IOApp {
     // Backups younger than 1 day: at least one backup needs to be 'on track' to progress to the 30-day window, hence `keepOldestObject` value
     youngerThanDayToDelete = s3ToDelete(youngerThanDay.toList, currentTime, 1.days, 4.hours, keepOldestObject = true).map(toObjectIdentifiers).asJavaCollection
     olderThanDayToDelete = s3ToDelete(olderThanDay.toList, currentTime, 30.days, 5.days, keepOldestObject = false).map(toObjectIdentifiers).asJavaCollection
-    _ <- Logger[IO].info(s"Deleting ${olderThanDayToDelete.size} S3 backups older than one day")
+    _ <- Logger[IO].info(s"Deleting ${olderThanDayToDelete.size} S3 backups older than one day: ${olderThanDayToDelete}")
     _ <- IO.blocking(s3Client.deleteObjects(getDeleteObjectsRequest(backupBucket, olderThanDayToDelete)))
-    _ <- Logger[IO].info(s"Deleting ${youngerThanDayToDelete.size} S3 backups younger than one day")
+    _ <- Logger[IO].info(s"Deleting ${youngerThanDayToDelete.size} S3 backups younger than one day: ${youngerThanDayToDelete}")
     _ <- IO.blocking(s3Client.deleteObjects(getDeleteObjectsRequest(backupBucket, youngerThanDayToDelete)))
   } yield ()
 
