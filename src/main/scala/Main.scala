@@ -117,7 +117,6 @@ object Main extends IOApp {
     case ProdEnvironment => "prod.application.conf"
   }
 
-
   private val s3BackupObjectRegex: Regex = "^([0-9]+)\\..*$".r
 
   private def getBackupFileRegex(appEnvironment: AppEnvironment): Regex = s"^([0-9]+)\\.${getEnvSlug(appEnvironment)}.backup.app.sqlite".r
@@ -126,13 +125,7 @@ object Main extends IOApp {
     .flatMap(o => s3BackupObjectRegex.findAllMatchIn(o.key())
       .map(m => Instant.ofEpochSecond(m.group(1).toLong)).nextOption().map(ts => (o, ts)))
 
-  private def maybeTail[A](list: List[A]): Option[List[A]] =
-    list match {
-      case iterable if iterable.size > 1 => Some(iterable.tail)
-      case _ => None
-    }
-
-  def s3ToDelete(backupObjectWithCreationTime: List[(S3Object, Instant)], current: Instant, interval: Duration, bucketSize: Duration, keepOldestObject: Boolean): Iterable[S3Object] = {
+  private def s3ToDelete(backupObjectWithCreationTime: List[(S3Object, Instant)], current: Instant, interval: Duration, bucketSize: Duration, keepOldestObject: Boolean): Iterable[S3Object] = {
     val bucketedObjects = backupObjectWithCreationTime.groupBy(p => (current.getEpochSecond - p._2.getEpochSecond) / bucketSize.toSeconds)
 
     if (bucketedObjects.isEmpty) {
@@ -142,12 +135,13 @@ object Main extends IOApp {
       val bucketCeiling = interval.toSeconds / bucketSize.toSeconds
       bucketedObjects.flatMap(entry => {
         val (bucket, entries) = entry
+        val sortedEntries = entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond))
         (bucket, keepOldestObject) match {
           // At least one backup needs to be 'on track' to progress to the next window, hence double tail
-          case (bucket, _) if bucket == 0 => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).getOrElse(List()).map(_._1)
-          case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => maybeTail(entries.sortBy(_._2)).getOrElse(List()).map(_._1)
+          case (bucket, _) if bucket == 0 => sortedEntries.drop(1).dropRight(1).map(_._1)
+          case (bucket, true) if bucket == maxBucket && bucket < bucketCeiling => sortedEntries.drop(1).dropRight(1).map(_._1)
           case (bucket, false) if bucket > bucketCeiling => entries.map(_._1)
-          case _ => entries.sortBy(_._2)(Ordering.by[Instant, Long](-1 * _.getEpochSecond)).pipe(maybeTail).getOrElse(List()).map(_._1)
+          case _ => sortedEntries.drop(1).map(_._1)
         }
       }
       )
